@@ -29,7 +29,7 @@ export function RiskReductionChart({ result }: { result: OptimizationResult }) {
           tickLine={false}
           width={140}
         />
-        <Tooltip formatter={(value: number) => formatCompactINR(value)} />
+        <Tooltip formatter={(value) => formatCompactINR(Number(value))} />
         <Bar dataKey="value" fill="#1E4FD8" barSize={28} radius={[0, 2, 2, 0]} />
       </BarChart>
     </ResponsiveContainer>

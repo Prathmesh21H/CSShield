@@ -12,7 +12,9 @@ import type { Criticality } from "@/types/asset";
  * addendum: a dashboard load must be instant, not wait on a Monte Carlo run.
  */
 export async function GET() {
-  const supabase = createServiceRoleClient();
+  // The generated database types currently infer these tables as `never`.
+  // Use the client dynamically here until the generated schema types are refreshed.
+  const supabase = createServiceRoleClient() as any;
 
   try {
     const { data: latest, error: latestError } = await supabase
@@ -41,15 +43,14 @@ export async function GET() {
       }))
       .reverse();
 
-    const freshness = await getDataFreshness(supabase);
-
     if (!latest) {
-      return NextResponse.json<RiskSummary | { current: null }>({
-        current: null,
-        trend: [],
-        dataFreshness: freshness,
-      });
+      // JSON `null` is what useRiskSummary treats as its "empty" state
+      // ("No risk score computed yet"); an object with current: null would be truthy and
+      // make the score card dereference null.
+      return NextResponse.json<RiskSummary | null>(null);
     }
+
+    const freshness = await getDataFreshness(supabase);
 
     const summary: RiskSummary = {
       current: {
@@ -77,13 +78,13 @@ export async function GET() {
  * automatically from a GET request.
  */
 export async function POST(_request: NextRequest) {
-  const supabase = createServiceRoleClient();
+  const supabase = createServiceRoleClient() as any;
 
   try {
     const { data: findingRows, error: findingsError } = await supabase
       .from("findings")
       .select(
-        "id, cvss_score, epss_score, is_kev, assets!inner(id, criticality, internet_facing)"
+        "id, cve_id, cvss_score, epss_score, is_kev, assets!inner(id, criticality, internet_facing)"
       )
       .eq("status", "open");
 
@@ -132,7 +133,7 @@ export async function POST(_request: NextRequest) {
   }
 }
 
-async function getDataFreshness(supabase: ReturnType<typeof createServiceRoleClient>) {
+async function getDataFreshness(supabase: any) {
   const sources: Array<"nvd" | "epss" | "kev"> = ["nvd", "epss", "kev"];
   const staleThresholdMs = 24 * 60 * 60 * 1000; // 24h — conservative combined threshold for this summary banner
 

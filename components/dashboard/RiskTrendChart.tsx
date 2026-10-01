@@ -59,8 +59,8 @@ export function RiskTrendChart({ trend, status }: RiskTrendChartProps) {
               width={70}
             />
             <Tooltip
-              formatter={(value: number) => formatCompactINR(value)}
-              labelFormatter={(v) => new Date(v).toLocaleDateString("en-IN")}
+              formatter={(value) => formatCompactINR(Number(value))}
+              labelFormatter={(v) => new Date(String(v)).toLocaleDateString("en-IN")}
               contentStyle={{ borderRadius: 2, borderColor: "#E2E5EA", fontSize: 13 }}
             />
             <Line

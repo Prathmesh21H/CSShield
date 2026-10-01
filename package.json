@@ -28,10 +28,10 @@
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.3.3",
-    "@types/node": "^20",
+    "@types/node": "^20.19.43",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "dotenv": "^16.4.7",
+    "dotenv": "^16.6.1",
     "eslint": "^9",
     "eslint-config-next": "16.3.6",
     "tailwindcss": "^4.3.3",

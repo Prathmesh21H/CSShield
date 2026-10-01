@@ -21,7 +21,7 @@ export async function POST(request: NextRequest) {
 
   try {
     // 1. Latest simulation's per-finding EAL contributions.
-    const { data: latestScore, error: scoreError } = await supabase
+    const { data: latestScoreRow, error: scoreError } = await supabase
       .from("risk_scores")
       .select("eal_value, top_contributors")
       .eq("scope_type", "org")
@@ -30,6 +30,11 @@ export async function POST(request: NextRequest) {
       .maybeSingle();
 
     if (scoreError) throw scoreError;
+
+    const latestScore = latestScoreRow as {
+      eal_value: number;
+      top_contributors: Array<{ findingId: string; ealContribution: number }> | null;
+    } | null;
 
     if (!latestScore || !latestScore.top_contributors?.length) {
       return apiError(
@@ -50,7 +55,11 @@ export async function POST(request: NextRequest) {
 
     if (findingError) throw findingError;
 
-    const cweById = new Map((findingRows ?? []).map((f: { id: string; cwe_id: string | null }) => [f.id, f.cwe_id]));
+    const cweById = new Map<string, string | null>(
+      (findingRows ?? []).map(
+        (f: { id: string; cwe_id: string | null }): [string, string | null] => [f.id, f.cwe_id]
+      )
+    );
 
     const optimizerFindings: OptimizerFinding[] = contributions.map((c) => ({
       id: c.findingId,
@@ -87,7 +96,7 @@ export async function POST(request: NextRequest) {
       }));
 
     // 5. Persist the run for audit trail.
-    const { error: insertError } = await supabase.from("optimization_runs").insert({
+    const { error: insertError } = await (supabase.from("optimization_runs") as any).insert({
       budget,
       selected_control_ids: solved.selectedControlIds,
       eal_before: solved.ealBefore,

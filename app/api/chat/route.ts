@@ -60,6 +60,17 @@ async function gatherGroundingData(
   supabase: ReturnType<typeof createServiceRoleClient>,
   intent: ReturnType<typeof classifyIntent>
 ): Promise<GroundingData> {
+  type RiskScoreRow = {
+    eal_value: number | string | null;
+    var95_value: number | string | null;
+    top_contributors: Array<{ findingId: string; ealContribution: number }> | null;
+  };
+  type OptimizationRunRow = {
+    budget: number | string | null;
+    selected_control_ids: string[] | null;
+    projected_eal: number | string | null;
+  };
+
   const data: GroundingData = {};
 
   if (intent === "highest_risk" || intent === "general_summary") {
@@ -71,11 +82,12 @@ async function gatherGroundingData(
       .limit(1)
       .maybeSingle();
 
-    if (latestScore) {
-      data.ealValue = Number(latestScore.eal_value);
-      data.var95Value = Number(latestScore.var95_value);
+    const score = latestScore as RiskScoreRow | null;
+    if (score) {
+      data.ealValue = Number(score.eal_value);
+      data.var95Value = Number(score.var95_value);
 
-      const topFive = [...(latestScore.top_contributors ?? [])]
+      const topFive = [...(score.top_contributors ?? [])]
         .sort((a, b) => b.ealContribution - a.ealContribution)
         .slice(0, 5);
 
@@ -86,7 +98,11 @@ async function gatherGroundingData(
           .select("id, cve_id, assets!inner(name)")
           .in("id", findingIds);
 
-        const byId = new Map((findingRows ?? []).map((r: any) => [r.id, r]));
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const byId = new Map<string, any>(
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (findingRows ?? []).map((r: any): [string, any] => [r.id, r])
+        );
         data.topContributors = topFive.map((c: { findingId: string; ealContribution: number }) => {
           const row = byId.get(c.findingId);
           return {
@@ -107,14 +123,15 @@ async function gatherGroundingData(
       .limit(1)
       .maybeSingle();
 
-    if (latestRun) {
-      data.optimizerBudget = Number(latestRun.budget);
-      data.optimizerProjectedEal = Number(latestRun.projected_eal);
+    const optimizationRun = latestRun as OptimizationRunRow | null;
+    if (optimizationRun) {
+      data.optimizerBudget = Number(optimizationRun.budget);
+      data.optimizerProjectedEal = Number(optimizationRun.projected_eal);
 
       const { data: controlRows } = await supabase
         .from("controls")
         .select("id, name, cost")
-        .in("id", latestRun.selected_control_ids ?? []);
+        .in("id", optimizationRun.selected_control_ids ?? []);
 
       data.optimizerControls = (controlRows ?? []).map((c: any) => ({
         name: c.name,
@@ -128,11 +145,11 @@ async function gatherGroundingData(
     // scoped to gaps only, across the default framework — kept intentionally
     // simple here (NIST CSF only) rather than duplicating the full matrix
     // logic; the Compliance page is the place for a complete breakdown.
-    const { data: framework } = await supabase
+    const { data: framework } = (await supabase
       .from("frameworks")
       .select("id, name")
       .eq("name", "NIST CSF")
-      .maybeSingle();
+      .maybeSingle()) as { data: { id: string; name: string } | null };
 
     if (framework) {
       const { data: frameworkControls } = await supabase
@@ -156,7 +173,10 @@ async function gatherGroundingData(
         .limit(1)
         .maybeSingle();
 
-      const selectedIds = new Set<string>(latestRun?.selected_control_ids ?? []);
+      const selectedIds = new Set<string>(
+        (latestRun as Pick<OptimizationRunRow, "selected_control_ids"> | null)
+          ?.selected_control_ids ?? []
+      );
       const openCweIds = new Set((openFindings ?? []).map((f: any) => f.cwe_id).filter(Boolean));
 
       data.complianceGaps = (frameworkControls ?? [])

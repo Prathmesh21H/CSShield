@@ -1,12 +1,18 @@
 import { createServerClient } from "@supabase/ssr";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { cookies } from "next/headers";
-import type { Database } from "./types";
 
 /**
  * Server-side Supabase client for use inside Route Handlers and
  * Server Components. Reads the session from cookies, so auth-aware
  * reads/writes respect Row Level Security automatically.
+ *
+ * NOTE: intentionally NOT parameterised with the hand-written Database type. That
+ * type (lib/supabase/types.ts) is declared as an `interface` without `Relationships`,
+ * which current supabase-js cannot match, so every query result collapsed to `never`
+ * and `next build` failed. To get typed queries back, generate real types with
+ * `npx supabase gen types typescript --project-id <id> > lib/supabase/types.ts`
+ * and re-add the generic, fixing whatever the stricter types then flag.
  *
  * For privileged writes (ingestion jobs writing findings on behalf of
  * the system, not a specific user), use createServiceRoleClient()
@@ -15,7 +21,7 @@ import type { Database } from "./types";
 export async function createClient() {
   const cookieStore = await cookies();
 
-  return createServerClient<Database>(
+  return createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
@@ -44,7 +50,7 @@ export async function createClient() {
  * that could be inlined into a client bundle, and never in client code.
  */
 export function createServiceRoleClient() {
-  return createSupabaseClient<Database>(
+  return createSupabaseClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!,
     { auth: { persistSession: false } }

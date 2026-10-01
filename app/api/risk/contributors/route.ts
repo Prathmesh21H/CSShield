@@ -4,6 +4,11 @@ import { rankContributors } from "@/lib/risk-engine/contributors";
 import { apiError, logServerError } from "@/lib/api/errors";
 import type { Finding } from "@/types/finding";
 
+type RiskScoreRow = {
+  eal_value: number | string | null;
+  top_contributors: Parameters<typeof rankContributors>[0]["perFindingContribution"] | null;
+};
+
 /**
  * Reads the latest org-level risk_scores row's stored per-finding
  * contributions (populated by the Monte Carlo run in /api/risk/summary
@@ -17,7 +22,7 @@ export async function GET(request: NextRequest) {
   const limit = Number(searchParams.get("limit") ?? "10");
 
   try {
-    const { data: latest, error: latestError } = await supabase
+    const { data: latestData, error: latestError } = await supabase
       .from("risk_scores")
       .select("eal_value, top_contributors")
       .eq("scope_type", "org")
@@ -26,6 +31,8 @@ export async function GET(request: NextRequest) {
       .maybeSingle();
 
     if (latestError) throw latestError;
+
+    const latest = latestData as RiskScoreRow | null;
 
     if (!latest || !latest.top_contributors || latest.top_contributors.length === 0) {
       return NextResponse.json<Finding[]>([]);
@@ -45,7 +52,11 @@ export async function GET(request: NextRequest) {
 
     if (findingError) throw findingError;
 
-    const findingById = new Map((findingRows ?? []).map((r: any) => [r.id, r]));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const findingById = new Map<string, any>(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (findingRows ?? []).map((r: any): [string, any] => [r.id, r])
+    );
 
     const response: Finding[] = ranked
       .map((r) => {
