@@ -8,6 +8,7 @@ import {
   ShieldCheck,
   MessageSquare,
   Settings,
+  Building2,
 } from "lucide-react";
 import { cn } from "@/lib/utils/cn";
 import type { UserRole } from "@/types/user";
@@ -22,6 +23,12 @@ interface NavItem {
 const NAV_ITEMS: NavItem[] = [
   { href: "/dashboard", label: "Overview", icon: LayoutDashboard },
   {
+    href: "/company",
+    label: "Company data",
+    icon: Building2,
+    roles: ["ciso", "analyst", "admin"],
+  },
+  {
     href: "/optimizer",
     label: "Optimizer",
     icon: SlidersHorizontal,
@@ -29,7 +36,7 @@ const NAV_ITEMS: NavItem[] = [
   },
   { href: "/compliance", label: "Compliance", icon: ShieldCheck },
   { href: "/chat", label: "Ask CyRO", icon: MessageSquare },
-  { href: "/admin", label: "Data sources", icon: Settings, roles: ["admin"] },
+  { href: "/admin", label: "Data sources", icon: Settings, roles: ["ciso", "admin"] },
 ];
 
 export function Sidebar({ role }: { role: UserRole }) {

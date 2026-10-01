@@ -3,6 +3,8 @@ import { createServiceRoleClient } from "@/lib/supabase/server";
 import { classifyIntent } from "@/lib/ai/intents";
 import { buildGroundedPrompt, type GroundingData } from "@/lib/ai/promptBuilder";
 import { callBedrock } from "@/lib/ai/bedrockClient";
+import { parseBudgetFromText } from "@/lib/ai/parseBudget";
+import { optimizeControlSelection, type OptimizerControl, type OptimizerFinding } from "@/lib/optimizer/knapsack";
 import { apiError, logServerError } from "@/lib/api/errors";
 import type { ChatSource } from "@/types/chat";
 
@@ -30,7 +32,7 @@ export async function POST(request: NextRequest) {
   const intent = classifyIntent(question);
 
   try {
-    const groundingData = await gatherGroundingData(supabase, intent);
+    const groundingData = await gatherGroundingData(supabase, intent, question);
     const { systemPrompt, sources } = buildGroundedPrompt(intent, groundingData);
 
     let answer: string;
@@ -58,19 +60,9 @@ export async function POST(request: NextRequest) {
 
 async function gatherGroundingData(
   supabase: ReturnType<typeof createServiceRoleClient>,
-  intent: ReturnType<typeof classifyIntent>
+  intent: ReturnType<typeof classifyIntent>,
+  question: string
 ): Promise<GroundingData> {
-  type RiskScoreRow = {
-    eal_value: number | string | null;
-    var95_value: number | string | null;
-    top_contributors: Array<{ findingId: string; ealContribution: number }> | null;
-  };
-  type OptimizationRunRow = {
-    budget: number | string | null;
-    selected_control_ids: string[] | null;
-    projected_eal: number | string | null;
-  };
-
   const data: GroundingData = {};
 
   if (intent === "highest_risk" || intent === "general_summary") {
@@ -82,12 +74,11 @@ async function gatherGroundingData(
       .limit(1)
       .maybeSingle();
 
-    const score = latestScore as RiskScoreRow | null;
-    if (score) {
-      data.ealValue = Number(score.eal_value);
-      data.var95Value = Number(score.var95_value);
+    if (latestScore) {
+      data.ealValue = Number(latestScore.eal_value);
+      data.var95Value = Number(latestScore.var95_value);
 
-      const topFive = [...(score.top_contributors ?? [])]
+      const topFive = [...(latestScore.top_contributors ?? [])]
         .sort((a, b) => b.ealContribution - a.ealContribution)
         .slice(0, 5);
 
@@ -98,11 +89,7 @@ async function gatherGroundingData(
           .select("id, cve_id, assets!inner(name)")
           .in("id", findingIds);
 
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const byId = new Map<string, any>(
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (findingRows ?? []).map((r: any): [string, any] => [r.id, r])
-        );
+        const byId = new Map((findingRows ?? []).map((r: any) => [r.id, r]));
         data.topContributors = topFive.map((c: { findingId: string; ealContribution: number }) => {
           const row = byId.get(c.findingId);
           return {
@@ -116,27 +103,45 @@ async function gatherGroundingData(
   }
 
   if (intent === "budget_recommendation") {
-    const { data: latestRun } = await supabase
-      .from("optimization_runs")
-      .select("budget, selected_control_ids, projected_eal")
-      .order("computed_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+    // Fix for the bug where "What would a ₹50 lakh budget fix?" returned
+    // "no data" and then hallucinated a nonexistent "Budget Allocation
+    // dashboard": this used to only ever read the LAST budget someone set
+    // on the Optimizer page's slider, never the budget actually asked
+    // about here. Now it parses the figure out of the question itself and
+    // computes a fresh, real optimizer result for exactly that amount.
+    const requestedBudget = parseBudgetFromText(question);
 
-    const optimizationRun = latestRun as OptimizationRunRow | null;
-    if (optimizationRun) {
-      data.optimizerBudget = Number(optimizationRun.budget);
-      data.optimizerProjectedEal = Number(optimizationRun.projected_eal);
+    if (requestedBudget !== null) {
+      const live = await computeOptimizerLive(supabase, requestedBudget);
+      if (live) {
+        data.optimizerBudget = requestedBudget;
+        data.optimizerProjectedEal = live.projectedEal;
+        data.optimizerControls = live.selectedControls.map((c) => ({ name: c.name, cost: c.cost }));
+      }
+    } else {
+      // No budget figure found in the question — fall back to the last
+      // budget someone actually ran through the Optimizer page, if any.
+      const { data: latestRun } = await supabase
+        .from("optimization_runs")
+        .select("budget, selected_control_ids, projected_eal")
+        .order("computed_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
 
-      const { data: controlRows } = await supabase
-        .from("controls")
-        .select("id, name, cost")
-        .in("id", optimizationRun.selected_control_ids ?? []);
+      if (latestRun) {
+        data.optimizerBudget = Number(latestRun.budget);
+        data.optimizerProjectedEal = Number(latestRun.projected_eal);
 
-      data.optimizerControls = (controlRows ?? []).map((c: any) => ({
-        name: c.name,
-        cost: Number(c.cost),
-      }));
+        const { data: controlRows } = await supabase
+          .from("controls")
+          .select("id, name, cost")
+          .in("id", latestRun.selected_control_ids ?? []);
+
+        data.optimizerControls = (controlRows ?? []).map((c: any) => ({
+          name: c.name,
+          cost: Number(c.cost),
+        }));
+      }
     }
   }
 
@@ -145,11 +150,11 @@ async function gatherGroundingData(
     // scoped to gaps only, across the default framework — kept intentionally
     // simple here (NIST CSF only) rather than duplicating the full matrix
     // logic; the Compliance page is the place for a complete breakdown.
-    const { data: framework } = (await supabase
+    const { data: framework } = await supabase
       .from("frameworks")
       .select("id, name")
       .eq("name", "NIST CSF")
-      .maybeSingle()) as { data: { id: string; name: string } | null };
+      .maybeSingle();
 
     if (framework) {
       const { data: frameworkControls } = await supabase
@@ -173,10 +178,7 @@ async function gatherGroundingData(
         .limit(1)
         .maybeSingle();
 
-      const selectedIds = new Set<string>(
-        (latestRun as Pick<OptimizationRunRow, "selected_control_ids"> | null)
-          ?.selected_control_ids ?? []
-      );
+      const selectedIds = new Set<string>(latestRun?.selected_control_ids ?? []);
       const openCweIds = new Set((openFindings ?? []).map((f: any) => f.cwe_id).filter(Boolean));
 
       data.complianceGaps = (frameworkControls ?? [])
@@ -195,4 +197,53 @@ async function gatherGroundingData(
   }
 
   return data;
+}
+
+async function computeOptimizerLive(
+  supabase: ReturnType<typeof createServiceRoleClient>,
+  budget: number
+): Promise<{ projectedEal: number; selectedControls: Array<{ name: string; cost: number }> } | null> {
+  const { data: latestScore } = await supabase
+    .from("risk_scores")
+    .select("top_contributors")
+    .eq("scope_type", "org")
+    .order("computed_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (!latestScore || !latestScore.top_contributors?.length) {
+    return null; // no risk calculation exists yet — nothing to optimize against
+  }
+
+  const contributions: Array<{ findingId: string; ealContribution: number }> = latestScore.top_contributors;
+  const findingIds = contributions.map((c) => c.findingId);
+
+  const { data: findingRows } = await supabase.from("findings").select("id, cwe_id").in("id", findingIds);
+  const cweById = new Map((findingRows ?? []).map((f: { id: string; cwe_id: string | null }) => [f.id, f.cwe_id]));
+
+  const optimizerFindings: OptimizerFinding[] = contributions.map((c) => ({
+    id: c.findingId,
+    cweId: cweById.get(c.findingId) ?? null,
+    ealContribution: c.ealContribution,
+  }));
+
+  const { data: controlRows } = await supabase
+    .from("controls")
+    .select("id, name, cost, est_risk_reduction_pct, mitigates_cwe_ids");
+
+  const optimizerControls: OptimizerControl[] = (controlRows ?? []).map((c: any) => ({
+    id: c.id,
+    name: c.name,
+    cost: Number(c.cost),
+    estRiskReductionPct: Number(c.est_risk_reduction_pct),
+    mitigatesCweIds: c.mitigates_cwe_ids ?? [],
+  }));
+
+  const solved = optimizeControlSelection(optimizerControls, optimizerFindings, budget);
+
+  const selectedControls = (controlRows ?? [])
+    .filter((c: any) => solved.selectedControlIds.includes(c.id))
+    .map((c: any) => ({ name: c.name, cost: Number(c.cost) }));
+
+  return { projectedEal: solved.projectedEal, selectedControls };
 }

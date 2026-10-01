@@ -1,5 +1,6 @@
 import type { AppUser } from "@/types/user";
 import { Badge } from "@/components/ui/Badge";
+import { DemoDataButton } from "@/components/layout/DemoDataButton";
 
 const ROLE_LABEL: Record<AppUser["role"], string> = {
   ciso: "CISO",
@@ -15,6 +16,8 @@ export function Navbar({ user }: { user: AppUser }) {
         Continuous Cyber Risk &amp; Investment Optimization
       </div>
       <div className="flex items-center gap-3">
+        <DemoDataButton />
+        <div className="h-5 w-px bg-line" aria-hidden="true" />
         <Badge tone="accent">{ROLE_LABEL[user.role]}</Badge>
         <span className="text-sm text-ink">
           {user.fullName ?? user.email}
